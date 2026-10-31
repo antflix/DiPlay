@@ -37,6 +37,9 @@ object CarPlayGlance {
     /** Called with each new snapshot, on the thread that changed it. */
     @Volatile var listener: ((Snapshot) -> Unit)? = null
 
+    /** Independent Pi HUD observer; never replaces the Android navigation widget listener. */
+    @Volatile var hudListener: ((Snapshot) -> Unit)? = null
+
     /** Lane guidance from 0x5204, on the iAP2 thread; empty when the lane strip goes away. */
     @Volatile var laneListener: ((List<LaneGuidanceLane>) -> Unit)? = null
 
@@ -46,7 +49,10 @@ object CarPlayGlance {
     /** Refresh time-dependent guidance even when no new metadata frame has arrived. */
     fun snapshot(): Snapshot {
         val (changed, current) = synchronized(this) { publishLocked() to last }
-        changed?.let { listener?.invoke(it) }
+        changed?.let { state ->
+            listener?.invoke(state)
+            hudListener?.invoke(state)
+        }
         return current
     }
 
@@ -71,7 +77,10 @@ object CarPlayGlance {
             }
             publishLocked()
         }
-        changed?.let { listener?.invoke(it) }
+        changed?.let { state ->
+            listener?.invoke(state)
+            hudListener?.invoke(state)
+        }
     }
 
     fun setConnected(next: Boolean) {
@@ -84,7 +93,10 @@ object CarPlayGlance {
             }
             publishLocked()
         }
-        changed?.let { listener?.invoke(it) }
+        changed?.let { state ->
+            listener?.invoke(state)
+            hudListener?.invoke(state)
+        }
     }
 
     /**
