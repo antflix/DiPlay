@@ -10,6 +10,7 @@ import json
 import logging
 import threading
 import time
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOST = "0.0.0.0"
@@ -34,31 +35,7 @@ def current():
     return data
 
 
-PAGE = """<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>DiPlay Pi navigation</title><style>
-body{background:#080c12;color:#e6ffed;font:20px system-ui,sans-serif;margin:40px}
-.big{font-size:clamp(36px,10vw,100px);font-weight:800}
-small{color:#a0bdaf}code{font-size:15px;overflow-wrap:anywhere}
-</style></head><body>
-<h2>CarPlay → Pi navigation</h2><div id="status">Waiting for DiPlay</div>
-<div class="big" id="turn">–</div><div class="big" id="distance"></div>
-<div id="road"></div><p><small id="eta"></small></p>
-<details><summary>Raw navigation data</summary><pre id="raw"></pre></details>
-<script>
-async function refresh(){
- try{
-  const r=await fetch('/navigation',{cache:'no-store'});const d=await r.json();
-  document.querySelector('#status').textContent=d.stale?'No fresh data':d.navigationActive?'Guidance active':d.connected?'CarPlay connected; no route':'CarPlay disconnected';
-  document.querySelector('#turn').textContent=d.maneuverType==null?'–':'Maneuver '+d.maneuverType;
-  document.querySelector('#distance').textContent=d.distanceMeters==null?'':d.distanceMeters+' m to turn';
-  document.querySelector('#road').textContent=d.road||'';
-  document.querySelector('#eta').textContent=d.remainingSeconds==null?'':'Remaining '+Math.round(d.remainingSeconds/60)+' minutes';
-  document.querySelector('#raw').textContent=JSON.stringify(d,null,2)
- }catch(e){document.querySelector('#status').textContent='Pi receiver offline'}
-}
-refresh();setInterval(refresh,2000)
-</script></body></html>"""
-
+HUD_PAGE = Path(__file__).with_name("pi_hud.html")
 
 class Handler(BaseHTTPRequestHandler):
     def respond(self, status, data, content_type="application/json"):
@@ -71,8 +48,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(output)
 
     def do_GET(self):
-        if self.path == "/":
-            return self.respond(200, PAGE, "text/html")
+        if self.path == "/" or self.path.startswith("/?"):
+            return self.respond(200, HUD_PAGE.read_text(encoding="utf-8"), "text/html")
         if self.path == "/health":
             return self.respond(200, json.dumps({"ok": True, "received": bool(last_received)}))
         if self.path == "/navigation":
@@ -100,6 +77,18 @@ class Handler(BaseHTTPRequestHandler):
             road = payload.get("road", "")
             if not isinstance(road, str) or len(road) > 256:
                 raise ValueError("invalid road")
+            lanes = payload.get("lanes", [])
+            if not isinstance(lanes, list) or len(lanes) > 12:
+                raise ValueError("invalid lanes")
+            for lane in lanes:
+                if not isinstance(lane, dict):
+                    raise ValueError("invalid lane")
+                if type(lane.get("index")) is not int:
+                    raise ValueError("invalid lane index")
+                if type(lane.get("angle")) is not int or not -360 <= lane["angle"] <= 360:
+                    raise ValueError("invalid lane angle")
+                if not isinstance(lane.get("recommended"), bool):
+                    raise ValueError("invalid lane recommendation")
         except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
             return self.respond(400, '{"error":"bad_payload"}')
         with LOCK:
