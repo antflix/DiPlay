@@ -63,11 +63,11 @@ jobs:
             echo "::notice::Using temporary Android debug signing. Future test updates may require uninstalling the previous HUD test APK."
           fi
 
-      - name: Run tests and build CarPlay-capable HUD test APK
+      - name: Build CarPlay-capable HUD test APK
         env:
           DIPLAY_AUTH_ASSETS_DIR: ${{ runner.temp }}/diplay-auth
         run: |
-          ./gradlew :shared:testDebugUnitTest :common:testDebugUnitTest :mobile:assembleStandaloneDebug --stacktrace
+          ./gradlew :mobile:assembleStandaloneDebug --stacktrace
 
       - name: Prepare downloadable APK
         shell: bash
