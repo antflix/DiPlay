@@ -1,7 +1,10 @@
 package com.shilapi.xcertplay.glance
 
 import android.content.Context
+import android.os.SystemClock
 import android.util.Log
+import com.shilapi.xcertplay.iap2.message.LaneGuidanceLane
+import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
@@ -11,18 +14,19 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 /**
- * Best-effort Pi HUD telemetry. It never runs HTTP or JSON serialization on the CarPlay,
- * UI, or iAP2 threads. A two-second refresh also keeps long straight-road guidance alive.
- * Nothing about a failed LAN request can fail the CarPlay session.
+ * Independent best-effort Pi HUD publisher. All HTTP and JSON work stays off the
+ * CarPlay/iAP2/UI threads; failures cannot interrupt the CarPlay session.
  *
- * The destination is the owner's Pi on their isolated van network. Keep this disabled
- * for other installations unless they explicitly set up a matching receiver.
+ * This personal build targets the van's Raspberry Pi on the trusted LAN.
  */
 object NavigationHudRelay {
     private const val TAG = "DiPlay-HudRelay"
     private const val ENDPOINT = "http://192.168.8.136:8765/navigation"
+    private const val LANE_TTL_MS = 25_000L
     private val started = AtomicBoolean(false)
-    private val latest = AtomicReference<CarPlayGlance.Snapshot?>(null)
+    private val latest = AtomicReference(CarPlayGlance.Snapshot())
+    private data class LaneState(val items: List<LaneGuidanceLane>, val observedMs: Long)
+    private val laneState = AtomicReference(LaneState(emptyList(), 0L))
     private val worker = Executors.newSingleThreadScheduledExecutor { task ->
         Thread(task, "diplay-pi-navigation").apply { isDaemon = true }
     }
@@ -30,22 +34,46 @@ object NavigationHudRelay {
 
     fun install(context: Context) {
         if (!started.compareAndSet(false, true)) return
-        // No song information is sent to the HUD. The listener runs on CarPlay's
-        // event thread and only swaps an immutable snapshot reference.
-        CarPlayGlance.hudListener = { latest.set(it) }
+        CarPlayGlance.hudListener = { next ->
+            val previous = latest.getAndSet(next)
+            // Do not carry lane advice into a new maneuver or route.
+            if (!next.connected || next.maneuverType == null ||
+                previous.maneuverType != next.maneuverType || previous.road != next.road) {
+                laneState.set(LaneState(emptyList(), 0L))
+            }
+        }
+        CarPlayGlance.hudLaneListener = { lanes ->
+            laneState.set(LaneState(lanes.toList().take(12), SystemClock.elapsedRealtime()))
+        }
         latest.set(CarPlayGlance.snapshot())
         worker.scheduleWithFixedDelay({
             try {
-                latest.get()?.let(::publish)
+                // Route instructions expire even if the phone stops publishing; refresh
+                // source state, rather than blindly repeating an obsolete cached snapshot.
+                publish(CarPlayGlance.snapshot())
             } catch (error: Exception) {
                 reportFailure(error)
             }
         }, 0, 2, TimeUnit.SECONDS)
-        Log.i(TAG, "HUD relay enabled for local Pi receiver")
+        Log.i(TAG, "Pi HUD relay active")
     }
 
     private fun publish(state: CarPlayGlance.Snapshot) {
         val active = state.connected && state.maneuverType != null
+        val observed = laneState.get()
+        val lanes = JSONArray()
+        if (active && observed.observedMs > 0 &&
+            SystemClock.elapsedRealtime() - observed.observedMs < LANE_TTL_MS) {
+            for (lane in observed.items) {
+                lanes.put(JSONObject().apply {
+                    put("index", lane.index)
+                    put("status", lane.status)
+                    put("recommended", lane.recommended)
+                    put("angle", lane.angle)
+                    put("highlightAngle", lane.highlightAngle ?: JSONObject.NULL)
+                })
+            }
+        }
         val body = JSONObject().apply {
             put("connected", state.connected)
             put("navigationActive", active)
@@ -53,9 +81,10 @@ object NavigationHudRelay {
             put("drivingSide", state.drivingSide)
             put("distanceMeters", if (active) state.distanceMeters else JSONObject.NULL)
             put("road", if (active) state.road else "")
-            put("arrivalEpochSeconds", state.arrivalEpochSeconds ?: JSONObject.NULL)
-            put("remainingSeconds", state.remainingSeconds ?: JSONObject.NULL)
-            put("remainingMeters", state.remainingMeters ?: JSONObject.NULL)
+            put("arrivalEpochSeconds", if (active) state.arrivalEpochSeconds ?: JSONObject.NULL else JSONObject.NULL)
+            put("remainingSeconds", if (active) state.remainingSeconds ?: JSONObject.NULL else JSONObject.NULL)
+            put("remainingMeters", if (active) state.remainingMeters ?: JSONObject.NULL else JSONObject.NULL)
+            put("lanes", lanes)
         }.toString()
         val connection = URL(ENDPOINT).openConnection() as HttpURLConnection
         try {
@@ -64,14 +93,11 @@ object NavigationHudRelay {
             connection.readTimeout = 1200
             connection.doOutput = true
             connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            connection.outputStream.use { stream ->
-                stream.write(body.toByteArray(Charsets.UTF_8))
-            }
-            if (connection.responseCode !in 200..299) {
-                throw IllegalStateException("Pi HUD HTTP " + connection.responseCode)
-            }
+            connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+            if (connection.responseCode !in 200..299)
+                throw IllegalStateException("Pi HTTP " + connection.responseCode)
             if (lastFailure != null) {
-                Log.i(TAG, "Pi HUD connection restored")
+                Log.i(TAG, "Pi HUD receiver reachable again")
                 lastFailure = null
             }
         } finally {
