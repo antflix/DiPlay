@@ -1,0 +1,109 @@
+name: Build DiPlay HUD APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Publish APK as a public GitHub Release (APK contains extractable CarPlay identity)"
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  hud-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out this fork
+        uses: actions/checkout@v4
+
+      - name: Validate public source tree
+        run: python3 scripts/check_public_tree.py
+
+      - name: Configure Java 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Configure Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools platforms;android-37.0 build-tools;36.0.0 ndk;28.2.13676358
+
+      - name: Configure Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Restore external CarPlay identity
+        shell: bash
+        env:
+          MFI_IDENTITY_B64: ${{ secrets.DIPLAY_MFI_IDENTITY_PK8_B64 }}
+          MFI_CERTIFICATE_B64: ${{ secrets.DIPLAY_MFI_CERTIFICATE_P7B_B64 }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$MFI_IDENTITY_B64" || -z "$MFI_CERTIFICATE_B64" ]]; then
+            echo "::error::Missing DIPLAY_MFI_IDENTITY_PK8_B64 or DIPLAY_MFI_CERTIFICATE_P7B_B64 repository secrets. A source-only APK cannot connect to CarPlay."
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/diplay-auth/offline-mfi"
+          umask 077
+          printf '%s' "$MFI_IDENTITY_B64" | base64 --decode > "$RUNNER_TEMP/diplay-auth/offline-mfi/identity.pk8"
+          printf '%s' "$MFI_CERTIFICATE_B64" | base64 --decode > "$RUNNER_TEMP/diplay-auth/offline-mfi/certificate.p7b"
+          test -s "$RUNNER_TEMP/diplay-auth/offline-mfi/identity.pk8"
+          test -s "$RUNNER_TEMP/diplay-auth/offline-mfi/certificate.p7b"
+
+      - name: Restore stable Android debug signing key
+        shell: bash
+        env:
+          DEBUG_KEYSTORE_B64: ${{ secrets.DIPLAY_DEBUG_KEYSTORE_B64 }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$DEBUG_KEYSTORE_B64" ]]; then
+            echo "::error::Missing DIPLAY_DEBUG_KEYSTORE_B64. A stable signing certificate is required to update previously installed HUD test APKs."
+            exit 1
+          fi
+          mkdir -p "$HOME/.android"
+          umask 077
+          printf '%s' "$DEBUG_KEYSTORE_B64" | base64 --decode > "$HOME/.android/debug.keystore"
+          test -s "$HOME/.android/debug.keystore"
+          keytool -list -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey > /dev/null
+
+      - name: Test and build standalone HUD debug APK
+        shell: bash
+        env:
+          DIPLAY_AUTH_ASSETS_DIR: ${{ runner.temp }}/diplay-auth
+        run: |
+          ./gradlew :shared:testDebugUnitTest :common:testDebugUnitTest :mobile:assembleStandaloneDebug --stacktrace
+
+      - name: Stage installable test APK
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp mobile/build/outputs/apk/debug/mobile-debug.apk dist/DiPlay-HUD-Test.apk
+          sha256sum dist/DiPlay-HUD-Test.apk > dist/SHA256SUMS.txt
+
+      - name: Upload downloadable APK to Actions
+        uses: actions/upload-artifact@v4
+        with:
+          name: DiPlay-HUD-Test
+          path: |
+            dist/DiPlay-HUD-Test.apk
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish public GitHub Release (opt in only)
+        if: ${{ inputs.publish_release == true }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="hud-test-${GITHUB_RUN_NUMBER}"
+          gh release create "$tag" dist/DiPlay-HUD-Test.apk dist/SHA256SUMS.txt \
+            --target "$GITHUB_SHA" \
+            --title "DiPlay HUD test build ${GITHUB_RUN_NUMBER}" \
+            --notes "Independent HUD test build (com.shihab.diplay.hudtest). Can be installed beside the upstream DiPlay release. Contains an extractable experimental CarPlay accessory identity; do not redistribute without checking your rights. Test while parked."
