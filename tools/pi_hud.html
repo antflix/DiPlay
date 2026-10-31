@@ -10,12 +10,12 @@
   * { box-sizing: border-box; }
   html, body { margin:0; padding:0; width:100%; height:100%; overflow:hidden; background:#000; }
   body { color:var(--ink); font-family:Arial, Helvetica, sans-serif; user-select:none; }
-  /* Windshield reflection uses both horizontal and vertical inversion (180 degrees). */
+  /* Only vertical inversion: horizontal orientation was corrected for this windshield setup. */
   #reflection {
     position:fixed; inset:0; background:#000;
     display:grid; grid-template-rows:minmax(0,20%) minmax(0,1fr) minmax(0,18%);
     padding:clamp(12px,3.2vh,32px) clamp(20px,5vw,90px) clamp(10px,3.4vh,34px);
-    transform:scale(-1, -1);
+    transform:scaleY(-1);
     transform-origin:center;
   }
   .lanes { display:flex; align-items:center; justify-content:center; gap:clamp(8px,1.8vw,22px); min-height:0; }
