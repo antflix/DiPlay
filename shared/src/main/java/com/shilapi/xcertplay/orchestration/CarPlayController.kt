@@ -181,6 +181,7 @@ class CarPlayController(
         WifiScanPause.restoreIfNeeded(context.applicationContext)
         BydNavigationOutputs.start(context.applicationContext)
         BydNavigationOutputs.setClusterStreamControl(::applyClusterUi)
+        com.shilapi.xcertplay.glance.NavigationHudRelay.install(context.applicationContext)
     }
 
     private enum class Phase { IDLE, MFI, WIRELESS, IPHONE, REENUMERATION, DATAPATHS, CONTROL }
