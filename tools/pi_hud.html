@@ -183,7 +183,8 @@ function render(data) {
   $("distanceUnit").textContent=unit;
   $("road").textContent=(typeof data.road === "string" ? data.road : "").slice(0,95);
   renderLanes(data.lanes);
-  const trip=[formatTrip(Number(data.remainingMeters)),timeLeft(Number(data.remainingSeconds))].filter(Boolean).join("  ·  ");
+  const trip=[data.remainingMeters == null ? "" : formatTrip(Number(data.remainingMeters)),
+    data.remainingSeconds == null ? "" : timeLeft(Number(data.remainingSeconds))].filter(Boolean).join("  ·  ");
   $("remainingValue").textContent=trip;
   $("remainingSlot").classList.toggle("hidden",!trip);
   const arrival=Number(data.arrivalEpochSeconds);
