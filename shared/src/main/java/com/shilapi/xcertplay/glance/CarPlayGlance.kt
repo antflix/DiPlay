@@ -43,6 +43,9 @@ object CarPlayGlance {
     /** Lane guidance from 0x5204, on the iAP2 thread; empty when the lane strip goes away. */
     @Volatile var laneListener: ((List<LaneGuidanceLane>) -> Unit)? = null
 
+    /** Independent lane observer for the Pi HUD, without taking over any BYD listener. */
+    @Volatile var hudLaneListener: ((List<LaneGuidanceLane>) -> Unit)? = null
+
     /** The last strip written to the log: Apple Maps repeats it while the overlap lasts. */
     private var loggedLanes: List<LaneGuidanceLane>? = null
 
@@ -66,6 +69,7 @@ object CarPlayGlance {
                 android.util.Log.i(TAG, "0x5204 " + describeLanes(lanes, frame.payload))
             }
             laneListener?.invoke(lanes)
+            hudLaneListener?.invoke(lanes)
             return
         }
         val changed = synchronized(this) {
@@ -90,6 +94,7 @@ object CarPlayGlance {
             if (!next) {
                 route.clear()
                 song.clear()
+                hudLaneListener?.invoke(emptyList())
             }
             publishLocked()
         }
