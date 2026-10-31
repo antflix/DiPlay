@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>Sprinter | Windshield HUD</title>
+<style>
+  :root { color-scheme: dark; --ink:#f5fff4; --hud:#a4ff71; --muted:rgba(198,232,198,.72); }
+  * { box-sizing: border-box; }
+  html, body { margin:0; padding:0; width:100%; height:100%; overflow:hidden; background:#000; }
+  body { color:var(--ink); font-family:Arial, Helvetica, sans-serif; user-select:none; }
+  /* Reflect the entire UI exactly once; do not mirror individual arrow SVGs. */
+  #reflection {
+    position:fixed; inset:0; background:#000;
+    display:grid; grid-template-rows:minmax(0,20%) minmax(0,1fr) minmax(0,18%);
+    padding:clamp(12px,3.2vh,32px) clamp(20px,5vw,90px) clamp(10px,3.4vh,34px);
+    transform:scaleX(-1);
+    transform-origin:center;
+  }
+  .lanes { display:flex; align-items:center; justify-content:center; gap:clamp(8px,1.8vw,22px); min-height:0; }
+  .lanes:empty { visibility:hidden; }
+  .lane {
+    width:clamp(50px,8vw,105px); height:clamp(54px,12vh,115px);
+    display:flex; align-items:center; justify-content:center;
+    border-bottom:clamp(3px,.5vh,6px) solid rgba(165,255,113,.23);
+    color:rgba(176,201,180,.42);
+  }
+  .lane.selected { border-bottom-color:var(--hud); color:var(--hud); }
+  .lane svg { width:80%; height:82%; overflow:visible; fill:none; stroke:currentColor; stroke-width:11; stroke-linecap:round; stroke-linejoin:round; }
+  .main {
+    display:flex; align-items:center; justify-content:center; gap:clamp(16px,5vw,96px);
+    min-height:0; min-width:0;
+  }
+  #maneuverSvg {
+    flex:0 1 46%; width:min(43vw,65vh); max-width:42vw; height:100%; max-height:64vh;
+    min-width:0; min-height:0; overflow:visible;
+    fill:none; stroke:var(--hud); stroke-width:19; stroke-linecap:round; stroke-linejoin:round;
+    filter:drop-shadow(0 0 2px rgba(155,255,105,.35));
+  }
+  .instruction { flex:1 1 54%; min-width:0; max-width:58%; display:flex; flex-direction:column; justify-content:center; align-items:flex-start; }
+  .distance { display:flex; gap:.16em; align-items:baseline; line-height:.92; white-space:nowrap; font-weight:800; font-variant-numeric:tabular-nums; letter-spacing:-.055em; }
+  #distanceNum { font-size:clamp(68px,13vw,230px); }
+  #distanceUnit { color:var(--hud); letter-spacing:-.03em; font-weight:700; font-size:clamp(26px,5vw,76px); }
+  #road { color:var(--ink); font-size:clamp(23px,4vw,66px); line-height:1.08; font-weight:700; letter-spacing:.01em; margin-top:clamp(10px,3vh,30px); max-width:100%; max-height:2.2em; overflow:hidden; overflow-wrap:anywhere; }
+  #road:empty { display:none; }
+  .footer { display:flex; justify-content:space-between; align-items:flex-end; gap:4vw; min-width:0; padding:0 clamp(4px,.7vw,12px); }
+  .footer-slot { display:flex; flex-direction:column; gap:4px; white-space:nowrap; }
+  .footer-slot:last-child { text-align:right; }
+  .foot-label { color:rgba(172,219,166,.57); text-transform:uppercase; font-size:clamp(12px,1.4vw,23px); letter-spacing:.15em; font-weight:700; }
+  .foot-value { font-variant-numeric:tabular-nums; font-size:clamp(24px,3vw,45px); font-weight:650; letter-spacing:.02em; }
+  .hidden { visibility:hidden; }
+  #idle {
+    display:none; position:absolute; inset:0; align-items:center; justify-content:center;
+    color:rgba(165,255,113,.34); font-weight:800; font-size:clamp(35px,7vw,90px);
+    letter-spacing:.3em;
+  }
+  #reflection.idle #idle { display:flex; }
+  #reflection.idle .lanes, #reflection.idle .main, #reflection.idle .footer { visibility:hidden; }
+  @media (max-aspect-ratio: 1.3) {
+    #reflection { grid-template-rows:18% 1fr 15%; padding:3vh 4vw; }
+    .main { flex-direction:column; gap:0; }
+    #maneuverSvg { flex: 0 1 55%; max-width:75vw; width:70vw; max-height:50%; }
+    .instruction { flex:0 1 auto; max-width:100%; align-items:center; text-align:center; }
+    #distanceNum { font-size:clamp(60px,17vw,160px); }
+    #road { font-size:clamp(20px,5vw,48px); }
+  }
+  @media (prefers-reduced-motion: reduce) { * { animation:none!important; transition:none!important; } }
+</style>
+</head>
+<body>
+<main id="reflection" class="idle" aria-label="Mirrored windshield navigation heads-up display">
+  <section id="laneStrip" class="lanes" aria-label="Recommended lanes"></section>
+  <section class="main">
+    <svg id="maneuverSvg" viewBox="0 0 300 300" role="img" aria-label="Next maneuver" xmlns="http://www.w3.org/2000/svg"><path id="maneuverPath" d="M150 255 V46 M102 96 L150 46 L198 96"/></svg>
+    <div class="instruction">
+      <div class="distance"><span id="distanceNum"></span><span id="distanceUnit"></span></div>
+      <div id="road"></div>
+    </div>
+  </section>
+  <section class="footer">
+    <div class="footer-slot" id="remainingSlot">
+      <span class="foot-label">Remaining</span><span class="foot-value" id="remainingValue"></span>
+    </div>
+    <div class="footer-slot" id="etaSlot">
+      <span class="foot-label">ETA</span><span class="foot-value" id="etaValue"></span>
+    </div>
+  </section>
+  <div id="idle" aria-live="polite">—</div>
+</main>
+<script>
+"use strict";
+const qs = new URLSearchParams(location.search);
+const $ = id => document.getElementById(id);
+if (qs.get("mirror") === "0") $("reflection").style.transform = "none";
+const metric = qs.get("units") === "metric";
+const DEMO = qs.get("demo") === "1";
+const ns = "http://www.w3.org/2000/svg";
+const paths = {
+  straight: "M150 260 V41 M103 90 L150 41 L197 90",
+  left: "M207 256 V154 Q207 119 169 119 H65 M115 69 L65 119 L115 169",
+  right: "M93 256 V154 Q93 119 131 119 H235 M185 69 L235 119 L185 169",
+  slightLeft: "M216 258 V194 Q216 169 198 150 L91 49 M141 52 L91 49 L88 99",
+  slightRight: "M84 258 V194 Q84 169 102 150 L209 49 M159 52 L209 49 L212 99",
+  sharpLeft: "M230 259 V185 Q230 153 194 153 H87 V62 M40 111 L87 62 L134 111",
+  sharpRight: "M70 259 V185 Q70 153 106 153 H213 V62 M166 111 L213 62 L260 111",
+  uturnLeft: "M208 258 V122 Q208 49 148 49 Q88 49 88 111 V159 M42 111 L88 159 L134 111",
+  uturnRight: "M92 258 V122 Q92 49 152 49 Q212 49 212 111 V159 M166 111 L212 159 L258 111",
+  roundabout: "M150 272 V226 M150 226 C88 226 65 187 77 138 C90 82 157 63 205 103 C246 137 232 201 181 211 M207 59 L205 103 L248 103",
+  destination: "M150 258 V176 M150 145 C94 145 86 103 86 80 A64 64 0 1 1 214 80 C214 103 205 145 150 198 Z M150 74 V99"
+};
+function maneuverKind(type, side) {
+  if ([1,20].includes(type)) return "left";
+  if ([2,21].includes(type)) return "right";
+  if (type === 47) return "sharpLeft";
+  if (type === 48) return "sharpRight";
+  if ([13,22,49,52].includes(type)) return "slightLeft";
+  if ([14,23,50,53].includes(type)) return "slightRight";
+  if ([4,18,19,26].includes(type)) return side === 1 ? "uturnRight" : "uturnLeft";
+  if (type === 6 || type === 7 || (type >= 28 && type <= 46)) return "roundabout";
+  if ([10,12,24,25,27].includes(type)) return "destination";
+  return "straight";
+}
+function formatTurn(m) {
+  if (!Number.isFinite(m) || m < 0) return ["—", ""];
+  if (metric) {
+    if (m < 1000) return [String(Math.max(0,Math.round(m/10)*10)), "m"];
+    return [(m/1000).toFixed(m < 10000 ? 1 : 0), "km"];
+  }
+  const ft = m * 3.28084, mi = m / 1609.344;
+  if (ft < 1000) {
+    const quantum = ft < 100 ? 5 : 10;
+    return [String(Math.max(0,Math.round(ft/quantum)*quantum)), "ft"];
+  }
+  return [mi.toFixed(mi < 10 ? 1 : 0), "mi"];
+}
+function formatTrip(m) {
+  if (!Number.isFinite(m) || m < 0) return "";
+  if (metric) return m >= 1000 ? (m/1000).toFixed(1)+" km" : Math.round(m)+" m";
+  const miles=m/1609.344;
+  return miles >= .1 ? miles.toFixed(1)+" mi" : Math.round(m*3.28084)+" ft";
+}
+function timeLeft(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return "";
+  const minutes=Math.max(0,Math.round(seconds/60));
+  return minutes>=60 ? Math.floor(minutes/60)+"h "+(minutes%60)+"m" : minutes+" min";
+}
+function renderLanes(lanes) {
+  const container=$("laneStrip");
+  container.replaceChildren();
+  if (!Array.isArray(lanes)) return;
+  for (const lane of lanes.slice(0,12)) {
+    if (!lane || !Number.isFinite(lane.angle)) continue;
+    const item=document.createElement("div");
+    item.className="lane"+(lane.recommended===true?" selected":"");
+    const svg=document.createElementNS(ns,"svg");
+    svg.setAttribute("viewBox","0 0 100 100");
+    const p=document.createElementNS(ns,"path");
+    const angle=Number.isFinite(lane.highlightAngle)&&lane.recommended===true ? lane.highlightAngle : lane.angle;
+    const kind=angle<=-45?"sharpLeft":angle<=-16?"left":angle<-6?"slightLeft":angle>=45?"sharpRight":angle>=16?"right":angle>6?"slightRight":"straight";
+    p.setAttribute("d",{
+      straight:"M50 88 V11 M28 33 L50 11 L72 33",
+      left:"M79 87 V53 Q79 45 67 45 H20 M42 23 L20 45 L42 67",
+      right:"M21 87 V53 Q21 45 33 45 H80 M58 23 L80 45 L58 67",
+      sharpLeft:"M85 87 V60 H28 V20 M8 40 L28 20 L48 40",
+      sharpRight:"M15 87 V60 H72 V20 M52 40 L72 20 L92 40",
+      slightLeft:"M73 87 V65 L31 18 M31 48 L31 18 L61 18",
+      slightRight:"M27 87 V65 L69 18 M69 48 L69 18 L39 18"
+    }[kind]);
+    svg.append(p);item.append(svg);container.append(item);
+  }
+}
+function render(data) {
+  if (!data || data.stale || !data.connected || !data.navigationActive || data.maneuverType==null) {
+    $("reflection").classList.add("idle");
+    $("idle").textContent = data && !data.stale && data.connected ? "READY" : "—";
+    return;
+  }
+  $("reflection").classList.remove("idle");
+  $("maneuverPath").setAttribute("d",paths[maneuverKind(data.maneuverType,data.drivingSide)] || paths.straight);
+  const [num,unit]=formatTurn(Number(data.distanceMeters));
+  $("distanceNum").textContent=num;
+  $("distanceUnit").textContent=unit;
+  $("road").textContent=(typeof data.road === "string" ? data.road : "").slice(0,95);
+  renderLanes(data.lanes);
+  const trip=[formatTrip(Number(data.remainingMeters)),timeLeft(Number(data.remainingSeconds))].filter(Boolean).join("  ·  ");
+  $("remainingValue").textContent=trip;
+  $("remainingSlot").classList.toggle("hidden",!trip);
+  const arrival=Number(data.arrivalEpochSeconds);
+  const eta=Number.isFinite(arrival)&&arrival>1000000000?new Date(arrival*1000).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"}):"";
+  $("etaValue").textContent=eta;
+  $("etaSlot").classList.toggle("hidden",!eta);
+}
+let loading=false;
+async function update(){
+  if (DEMO || loading) return;
+  loading=true;
+  try {
+    const res=await fetch("/navigation",{cache:"no-store"});
+    if(!res.ok) throw Error("HTTP "+res.status);
+    render(await res.json());
+  } catch (_) {
+    render({stale:true});
+  } finally { loading=false; }
+}
+if (DEMO) {
+  render({connected:true,navigationActive:true,stale:false,maneuverType:2,drivingSide:0,
+    distanceMeters:137,road:"US-89 N · Exit 7",remainingMeters:14800,remainingSeconds:710,
+    arrivalEpochSeconds:Math.floor(Date.now()/1000)+710,
+    lanes:[{index:0,angle:0,recommended:false},{index:1,angle:0,recommended:false},
+      {index:2,angle:38,highlightAngle:38,recommended:true},{index:3,angle:45,recommended:true}]});
+} else {
+  update();setInterval(update,1000);
+}
+</script>
+</body>
+</html>
